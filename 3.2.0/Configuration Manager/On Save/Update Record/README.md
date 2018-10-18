@@ -12,6 +12,5 @@ Update record integration on record save.
 * [Python 2.7](https://www.python.org) - Pyhton 2.7
 ## Authors
 * **Jeremy M Crews** - *Initial work* - [jeremymcrews](https://github.com/jeremymcrews)
-* See also the list of [contributors](https://github.com/PhoenixNAP-SecuritySrvs/Swimlane-3.2-Applications/contributors) who participated in this project.
-## License
+* See also the list of [contributors](https://github.com/PhoenixNAP-SecuritySrvs/Swimlane-Intergrations/graphs/contributors) who participated in this project.## License
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
