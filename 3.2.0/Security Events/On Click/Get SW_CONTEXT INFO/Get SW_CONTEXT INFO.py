@@ -1,0 +1,1 @@
+print sw_context.user, sw_context.state, sw_context.config, sw_context.inputs

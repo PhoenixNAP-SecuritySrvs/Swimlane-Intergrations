@@ -1,0 +1,518 @@
+{
+  "$type": "Core.Models.Integrations.Task, Core",
+  "applicationId": "aP0pSxO_qFQhNWteI",
+  "action": {
+    "$type": "Core.Models.Integrations.Actions.Python.PythonAction, Core",
+    "type": "python",
+    "readonly": false,
+    "script": "from slackclient import SlackClient\nfrom swimlane import Swimlane\nimport os\nimport urllib3\n\nurllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)\n\nslApiUser = sw_context.inputs['apiUser']\nslApiKey = sw_context.inputs['apiKey']\nslApiHost = sw_context.inputs['apiHost']\nseAppId = sw_context.config[\"ApplicationId\"]\nseRecordId = sw_context.config[\"RecordId\"]\nseAlarmRuleName = sw_context.inputs[\"AlarmRuleName\"]\nseCaseSource = sw_context.inputs[\"caseSource\"]\ncrmAppId = sw_context.inputs['crmAppId']\nuccAppId = sw_context.inputs['socUccAppId']\nuctAppId = sw_context.inputs['socUctAppId']\nswimlane = Swimlane(slApiHost, slApiUser, slApiKey, verify_ssl=False)\nseApp = swimlane.apps.get(id=seAppId)\ncrmApp = swimlane.apps.get(id=crmAppId)\nuccApp = swimlane.apps.get(id=uccAppId)\nuctApp = swimlane.apps.get(id=uctAppId)\nseRecord = seApp.records.get(id=seRecordId)\ntracking_id = seRecord['Tracking Id']\nclientName = seRecord['CS: Client Name']\nsc = SlackClient(sw_context.inputs['slackToken'])\n\nos.environ['HTTPS_PROXY'] = sw_context.inputs['proxyUrl']\n\ndef merge_two_dicts(x, y):\n    z = x.copy()  # start with x's keys and values\n    z.update(y)  # modifies z with y's keys and values & returns None\n    return z\n\n\ntry:\n    needsToBeSaved = False\n    crmReports = crmApp.reports.build('Get All CRM Records')\n    clientIDs = []\n    for crmRecord in crmReports:\n        for e in crmRecord['Entity ID']:\n            clientIDs.append(int(e))\n    crmReport = crmApp.reports.build('Get All CRM Records')\n    crmReport.filter('Client Name', 'equals', clientName)\n    recordCount = len(crmReport)\n    data = {}\n    if clientName == 'Unknown' or recordCount == 0:\n        data = {\"tracking_id\": tracking_id, \"allication_id\": seAppId, \"record_id\": seRecordId, \"record_exists\": \"yes\",\n                \"LgPollSEV2Completed\": \"yes\", 'LGPollCRMCompleted': \"yes\", \"LGPollUCTandUCCCompleted\": \"yes\", }\n    elif recordCount > 0:\n        clientId = None\n        crmReport = crmApp.reports.build('Get All CRM Records')\n        crmReport.filter('Client Name', 'equals', clientName)\n        for crmRecord in crmReport:\n            data = {\"tracking_id\": tracking_id,\n                    \"allication_id\": seAppId,\n                    \"record_id\": seRecordId,\n                    \"record_exists\": \"yes\",\n                    \"LgPollSEV2Completed\": \"yes\",\n                    'industry': crmRecord['Client Industry'],\n                    'employees': crmRecord['Client Number of Employees'],\n                    'operation': crmRecord['Client Country of Operation'],\n                    'notes': crmRecord['Additional notes'],\n                    'ubscid': crmRecord['UBS: Client ID'],\n                    'ubscname': crmRecord['UBS: Client Name'],\n                    'LGPollCRMCompleted': \"yes\",\n                    \"UbsClientId\": crmRecord['UBS: Client ID'],\n                    \"UbsClientName\": crmRecord['UBS: Client Name'],\n                    \"ClientId\": clientId}\n            contactToList = []\n            CcContactToList = []\n            for r in crmRecord['Primary Alert Contact Information']:\n                seRecord['Primary Alert Contact Information'].add(r)\n                contactToList.append(r['E-Mail'])\n                needsToBeSaved = True\n            for r in crmRecord['Secondary Alert Contact Information']:\n                seRecord['Secondary Alert Contact Information'].add(r)\n                CcContactToList.append(r['E-Mail'])\n                needsToBeSaved = True\n            for r in crmRecord['Tertiary Alert Contact Information']:\n                seRecord['Tertiary Alert Contact Information'].add(r)\n                CcContactToList.append(r['E-Mail'])\n                needsToBeSaved = True\n            for r in crmRecord['Quaternary Alert Contact Information']:\n                seRecord['Quaternary Alert Contact Information'].add(r)\n                CcContactToList.append(r['E-Mail'])\n                needsToBeSaved = True\n            for r in crmRecord['On-Call Alert Contact Information']:\n                seRecord['On-Call Alert Contact Information'].add(r)\n                CcContactToList.append(r['E-Mail'])\n                needsToBeSaved = True\n            if needsToBeSaved:\n                seRecord['LG: No Second Pass'] = 'no'\n                seRecord.save()\n            contactToList = list(set(contactToList))\n            CcContactToList = list(set(CcContactToList))\n            data[\"to\"] = contactToList\n            data['cc'] = CcContactToList\n    if seCaseSource == 'SIEM Alert' or seCaseSource == 'SIEM Diagnostics':\n        uccReport = uccApp.reports.build('Get UCC App Records')\n        uccReport.filter('SIEM Rule Name', 'equals', seAlarmRuleName)\n        uccReport.filter('Client Name', 'equals', clientName)\n        recordCount = len(uccReport)\n        if recordCount > 0:\n            for uccRecord in uccReport:\n                fields = {\"LGPollUCTandUCCCompleted\": \"yes\",\n                          \"priority\": uccRecord['SIEM Priority'],\n                          \"ruleId\": uccRecord['SIEM Rule Number'],\n                          \"rpn\": uccRecord['Response Procedure Name'],\n                          \"LG: UCT Exists\": \"yes\",\n                          \"VERISSecurityIncident\": uccRecord['VERIS: Security Incident'],\n                          \"VERISConfidence\": uccRecord['VERIS: Confidence?'],\n                          \"VERISCustomerInternal\": uccRecord['VERIS: Customer (Internal)'],\n                          \"VERISPrimaryThreatActor\": uccRecord['VERIS: Primary Threat Actor'],\n                          \"VERISVarietiesofinternalactors\": uccRecord['VERIS: Varieties of internal actors'],\n                          \"VERISMotivesofinternalactors\": uccRecord['VERIS: Motives of internal actors'],\n                          \"VERISErrorActions\": uccRecord['VERIS: Error Action(s)'],\n                          \"VERISPrimaryThreatAction\": uccRecord['VERIS: Primary Threat Action'],\n                          \"VERISVarietiesoferrors\": uccRecord['VERIS: Varieties of errors'],\n                          \"VERISWhyerrorsoccurred\": uccRecord['VERIS: Why errors occurred'],\n                          \"VERISIfvarietyLosswherelost\": uccRecord['VERIS: If variety = \\'Loss\\', where lost?'],\n                          \"VERISWhoHOSTSorstorestheseassets\": uccRecord['VERIS: Who HOSTS (or stores) these asset(s)?'],\n                          \"VERISWhoMANAGEStheseassets\": uccRecord['VERIS: Who MANAGES these asset(s)?'],\n                          \"VERISAvailabilityUtility\": uccRecord['VERIS: Availability/Utility'],\n                          \"VERISInterruption\": uccRecord['VERIS: Interruption'],\n                          \"CyberKillChainPhase\": uccRecord['Cyber Kill Chain Phase'],\n                          \"RecommendedActionbyClient\": uccRecord['Recommended Action by Client'],\n                          \"RecommendedActionbyAnalyst\": uccRecord['Recommended Action by Analyst'],\n                          \"Introduction\": uccRecord['Introduction'],\n                          \"Logic\": uccRecord['Logic'],\n                          }\n                data = merge_two_dicts(data, fields)\n        elif recordCount == 0:\n            data = merge_two_dicts(data, {\"record_exists\": \"yes\",\n                                          \"LgPollSEV2Completed\": \"yes\",\n                                          \"LGPollUCTandUCCCompleted\": \"yes\",\n                                          \"LGPollCRMCompleted\": \"yes\", })\n\n    else:\n        data = merge_two_dicts(data, {\"tracking_id\": tracking_id,\n                                      \"allication_id\": seAppId,\n                                      \"record_id\": seRecordId,\n                                      \"record_exists\": \"yes\",\n                                      \"LgPollSEV2Completed\": \"yes\",\n                                      \"LGPollUCTandUCCCompleted\": \"yes\",\n                                      \"LGPollCRMCompleted\": \"yes\",})\n    seRecord = seApp.records.get(id=seRecordId)\n    scData = {}\n    if seRecord['LG: No Second Pass'] != 'no':\n        if seRecord['ts']:\n            scText = 'Updated Ticket Details: {}/record/{}/{}'.format(sw_context.inputs['swimlaneWebUrl'], seAppId,\n                                                                      seRecordId)\n            scApiCall = sc.api_call(\"chat.postMessage\", channel=\"GBNQZ0F27\", text=scText, thread_ts=seRecord['ts'])\n            scData = {'ts': scApiCall['ts'], 'channel': scApiCall['channel']}\n        else:\n            scText = 'New Security Event Created: {}/record/{}/{}'.format(sw_context.inputs['swimlaneWebUrl'], seAppId, \n                                                                          seRecordId)\n            scApiCall = sc.api_call(\"chat.postMessage\", channel=sw_context.inputs['slackAlarmChannel'], text=scText)\n            scData = {'ts': scApiCall['ts'], 'channel': scApiCall['channel']}\n    combineData = merge_two_dicts(data, scData)\n    sw_outputs = [combineData]\nexcept Exception as e:\n    scText = 'Error running integration SE: Poll data from SE, CRM, UCC, and UCT on Record {}. Error: {}'.format(seRecordId, e)\n    scApiCall = sc.api_call(\"chat.postMessage\", channel=sw_context.inputs['slackErrorChannel'], text=scText)",
+    "descriptor": {
+      "$type": "Core.Models.Integrations.Actions.AvailableActionDescriptor, Core",
+      "inputParameters": {
+        "$type": "System.Collections.Generic.Dictionary`2[[System.String, mscorlib],[Core.Models.Integrations.Descriptors.Descriptor, Core]], mscorlib"
+      },
+      "description": "Execute Python scripts",
+      "actionType": "python",
+      "family": "Scripts",
+      "base64Image": "data:image/png;base64,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",
+      "readonly": false,
+      "availableOutputTypes": [
+        "insertUpdateRecord",
+        "email",
+        "referentialTask",
+        "saveToFile",
+        "setFieldValue"
+      ],
+      "id": "acd_d2zQVOpwzDY97",
+      "name": "Python",
+      "disabled": false
+    }
+  },
+  "inputMapping": [
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "apiUser",
+      "value": "swimlaneApiUsername",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "apiKey",
+      "value": "swimlaneApiKey",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "apiHost",
+      "value": "swimlaneApiHost",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "crmAppId",
+      "value": "crm",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "record",
+      "key": "AlarmRuleName",
+      "value": "aWcXwc7YXkfm40v4O",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "record",
+      "key": "caseSource",
+      "value": "aWwUaDcKEbTGlq4de",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "socUccAppId",
+      "value": "ucc",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "socUctAppId",
+      "value": "uct",
+      "addMissing": false,
+      "listModificationType": "none",
+      "example": ""
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "proxyUrl",
+      "value": "proxyUrl",
+      "example": "",
+      "addMissing": false,
+      "listModificationType": "none"
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "slackToken",
+      "value": "slackToken",
+      "example": "",
+      "addMissing": false,
+      "listModificationType": "none"
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "swimlaneWebUrl",
+      "value": "swimlaneWebUrl",
+      "addMissing": false,
+      "listModificationType": "append"
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "slackAlarmChannel",
+      "value": "slackAlarmChannel",
+      "addMissing": false,
+      "listModificationType": "append"
+    },
+    {
+      "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+      "type": "credentials",
+      "key": "slackErrorChannel",
+      "value": "slackErrorChannel",
+      "addMissing": false,
+      "listModificationType": "append"
+    }
+  ],
+  "isSystemTask": false,
+  "outputs": [
+    {
+      "$type": "Core.Models.Integrations.Outputs.SetFieldValueOutput, Core",
+      "type": "setFieldValue",
+      "mappings": [
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "record_exists",
+          "value": "aXtHRhSmebgtzYIRy",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "LgPollSEV2Completed",
+          "value": "aYWAjvRK2JHuNAdZT",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "LGPollCRMCompleted",
+          "value": "aYq7NWw5kA5P3zo7j",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "LGPollUCTandUCCCompleted",
+          "value": "aYCE5IxYLSUOgMT0D",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "tracking_id",
+          "value": "aSVEYfmVUeFE1Sjo5",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "allication_id",
+          "value": "aRsLGRny5weDdqOga",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "record_id",
+          "value": "aRYOcqJBP4qix1E7K",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "industry",
+          "value": "aa61waOmfqkkPBj3F",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "employees",
+          "value": "aKua_FxgFrGb1CgC3",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "operation",
+          "value": "aZn5Hyu_yzxEiNYU_",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "priority",
+          "value": "aZ975V1k6a4ndWFYQ",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "ruleId",
+          "value": "aWIbH_dmqtsGNCkW8",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "rpn",
+          "value": "aO3wSlJp47qIQN665",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISSecurityIncident",
+          "value": "aQvaEsEMU4V9Edrpt",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISConfidence",
+          "value": "a54FliX1S9BRFbIDM",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISCustomerInternal",
+          "value": "a7bpvbRD0zbSp5dhO",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISPrimaryThreatActor",
+          "value": "aPenfQHGhfI8SOBas",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISVarietiesofinternalactors",
+          "value": "aVzjYe2jckKCMdXmx",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISMotivesofinternalactors",
+          "value": "aJdoPo_aTR3aEx_y2",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISErrorActions",
+          "value": "a9pSQsrctyCzgmocA",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISPrimaryThreatAction",
+          "value": "aPKr0onU_oUdla11c",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISVarietiesoferrors",
+          "value": "aVLqGQ4BE1jBz0CfR",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISWhyerrorsoccurred",
+          "value": "adGIUpsC0Q3077B8D",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISIfvarietyLosswherelost",
+          "value": "aBj8IXnG450_reoyh",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISWhoHOSTSorstorestheseassets",
+          "value": "aeD8QfKW5zSWCYgoz",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISWhoMANAGEStheseassets",
+          "value": "aduBn2qkP7f0VkWFj",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISAvailabilityUtility",
+          "value": "ad_k9hCiByOWDxNo",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISInterruption",
+          "value": "aDcpACiuFCq11WpKD",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "VERISInterruptionStartTime",
+          "value": "aEFiSQhRdvR1Q99Rj",
+          "addMissing": false,
+          "dataFormat": "Standard",
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "UbsClientId",
+          "value": "a4sa8",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "UbsClientName",
+          "value": "aj67v",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "ts",
+          "value": "avutg",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "channel",
+          "value": "azoqb",
+          "addMissing": false,
+          "listModificationType": "none"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "ClientId",
+          "value": "aXtKW34eK9smrGaJP",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "to",
+          "value": "a20mr",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "cc",
+          "value": "a1iab",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "CyberKillChainPhase",
+          "value": "adaN72sYrXIqMtbNz",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "RecommendedActionbyClient",
+          "value": "a78ne",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "RecommendedActionbyAnalyst",
+          "value": "aeDDKvEEZgixtnee2",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "Introduction",
+          "value": "amaq9",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "Logic",
+          "value": "awato",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "outputParameter",
+          "key": "LrLogMessage",
+          "value": "a3fud",
+          "addMissing": false,
+          "listModificationType": "append"
+        },
+        {
+          "$type": "Core.Models.Integrations.Descriptors.Mapping, Core",
+          "type": "stdOutput",
+          "key": "Standard Output",
+          "value": "aTS4UVEpaCek6uETr",
+          "addMissing": false,
+          "listModificationType": "append"
+        }
+      ]
+    }
+  ],
+  "triggers": [],
+  "createdByUser": {
+    "$type": "Core.Models.Utilities.UserGroupSelection, Core",
+    "id": "aSckkzYFl8vDY13s4",
+    "name": "Jeremy Crews"
+  },
+  "modifiedByUser": {
+    "$type": "Core.Models.Utilities.UserGroupSelection, Core",
+    "id": "aSckkzYFl8vDY13s4",
+    "name": "Jeremy Crews"
+  },
+  "createdDate": "2018-09-05T21:52:56.528Z",
+  "modifiedDate": "2018-10-18T17:06:33.347Z",
+  "id": "aHeVd6xCB06pAWKz_",
+  "name": "Get Data From SE, CRM, UCC, and UCT",
+  "disabled": false,
+  "description": "Get Data From SE, CRM, UCC, and UCT"
+}
